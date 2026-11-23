@@ -156,6 +156,7 @@
   "-wex-mtl-poshfix": [],
   "-wex-va-nullguard": [],
   "-wex-va-vfeg12": [],
+  "-wex-va-vpfix": [],
   "-wex-dsi-hdmi-test": [],
   "-wex-dsi-power-test": []
 }

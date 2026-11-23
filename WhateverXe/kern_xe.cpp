@@ -4530,6 +4530,9 @@ static void mtlPoshScan(const void *data,uint64_t size) {
 // VA plug-in tables (kern_va_fix.hpp). Counters are laid out as VAFix::Slot.
 static bool vaNullGuardActive {}, vaVFEG12Requested {}, vaVFEG12Active {};
 static uint32_t vaNullGuardCounts[VAFix::TableSlots] {}, vaVFEG12Counts[VAFix::TableSlots] {};
+// -wex-va-vpfix (issue #81): patched, mismatched, write failures, scanned hits.
+static bool vaVPFixActive {};
+static uint32_t vaVPFixCounts[4] {};
 static uint32_t vaVFEG12Latch {}; // PageFix::Undecided..Committed
 // VAFix::L3WhitelistSampled | L3Whitelisted, or 0 (kern_va_fix.hpp): V1's LRI
 // to L3ALLOC 0xB134 relies on the RCS FORCE_TO_NONPRIV entry that
@@ -4600,12 +4603,18 @@ static void vaFixScan(uint64_t offset,const void *data,uint64_t size) {
    case PageFix::Write::Failed:vaFixCount(vaVFEG12Counts,VAFix::WriteFailures);return;
   }
  });
+ // -wex-va-vpfix (#81): independent anchor, no gate beyond the switch.
+ if(vaVPFixActive)PageFix::scan(VAFix::VP,VAFix::VPAnchors,bytes,size,offset,PageFix::findByte,[](size_t i,uint8_t *at,bool pinned) {
+  if(PageFix::single(pinned)!=PageFix::Action::Patch) {vaFixCount(vaVPFixCounts,1);return;}
+  if(!vaFixWrite(VAFix::VP[i],at)) {vaFixCount(vaVPFixCounts,2);return;}
+  vaFixCount(vaVPFixCounts,0);
+ });
 }
 // Every validated range or page goes to each active table. clean: the range
 // matched its signature (no tainted subrange); the VA tables need it.
 static void pageInScan(uint64_t offset,const void *data,uint64_t size,bool clean) {
  if(mtlPoshActive)mtlPoshScan(data,size);
- if(clean && (vaNullGuardActive || vaVFEG12Active))vaFixScan(offset,data,size);
+ if(clean && (vaNullGuardActive || vaVFEG12Active || vaVPFixActive))vaFixScan(offset,data,size);
 }
 // xnu bsd/kern/ubc_subr.c: boolean_t cs_validate_range(vnode_t, memory_object_t,
 // memory_object_offset_t page_offset, const void *data, vm_size_t, unsigned
@@ -4650,6 +4659,14 @@ static bool vaFixSerialize(void *,void *,OSSerialize *serializer) {
  auto d=OSData::withBytes(out,sizeof(out));if(!d)return false;
  const bool ok=d->serialize(serializer);d->release();return ok;
 }
+// WEXVAFixVP: revision 1, active, patched, offset mismatches, write failures.
+static bool vaVPFixSerialize(void *,void *,OSSerialize *serializer) {
+ const uint32_t out[5] {1,vaVPFixActive?1U:0U,
+  __atomic_load_n(&vaVPFixCounts[0],__ATOMIC_RELAXED),__atomic_load_n(&vaVPFixCounts[1],__ATOMIC_RELAXED),
+  __atomic_load_n(&vaVPFixCounts[2],__ATOMIC_RELAXED)};
+ auto d=OSData::withBytes(out,sizeof(out));if(!d)return false;
+ const bool ok=d->serialize(serializer);d->release();return ok;
+}
 // The only installer of the page-in routes; processKernel calls it once and
 // pageInRouted keeps a second call from routing again.
 static void installPageInPatcher(KernelPatcher &patcher) {
@@ -4661,13 +4678,14 @@ static void installPageInPatcher(KernelPatcher &patcher) {
  // stays 0.
  mtlPoshActive=mtl && noPOSH;
  vaNullGuardActive=checkKernelArgument("-wex-va-nullguard");
+ vaVPFixActive=checkKernelArgument("-wex-va-vpfix");
  // VFEG12 needs -wex-tgl-gpurec and -wex-tgl-no-posh requested here; their
  // install state is checked by vaVFEG12Gate when the first page is seen.
  vaVFEG12Requested=checkKernelArgument("-wex-va-vfeg12");
  vaVFEG12Active=vaVFEG12Requested && noPOSH && checkKernelArgument("-wex-tgl-gpurec");
  auto root=IORegistryEntry::getRegistryRoot();
  if(mtl && !noPOSH)root->setProperty("WEXMTLPoshFixNeedsNoPOSH",true);
- if(mtlPoshActive || vaNullGuardActive || vaVFEG12Active) {
+ if(mtlPoshActive || vaNullGuardActive || vaVFEG12Active || vaVPFixActive) {
   pageInRouted=true;
   uint32_t routes=0;
   if(patcher.solveSymbol(KernelPatcher::KernelID,"_cs_validate_range"))routes|=PageFix::RangePresent;
@@ -4691,6 +4709,10 @@ static void installPageInPatcher(KernelPatcher &patcher) {
   root->setProperty("WEXVAFixReady",(vaNullGuardActive || vaVFEG12Active) &&
    PageFix::routesComplete(__atomic_load_n(&pageInRoutes,__ATOMIC_RELAXED)));
   if(auto s=OSSerializer::forTarget(nullptr,vaFixSerialize)) {root->setProperty("WEXVAFix",s);s->release();}
+ }
+ if(vaVPFixActive) {
+  root->setProperty("WEXVAFixVPReady",PageFix::routesComplete(__atomic_load_n(&pageInRoutes,__ATOMIC_RELAXED)));
+  if(auto s=OSSerializer::forTarget(nullptr,vaVPFixSerialize)) {root->setProperty("WEXVAFixVP",s);s->release();}
  }
 }
 

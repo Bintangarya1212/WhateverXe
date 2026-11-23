@@ -28,8 +28,8 @@ assert 'installPageInPatcher(patcher);' in body('void XE::processKernel(KernelPa
 assert 'installMTLPoshFix' not in s and 'mtlPoshValidate' not in s
 # Routes only when a table can act; tables are decided before routing.
 gate = re.search(r'if\((.*?)\) \{\n  pageInRouted=true;', install).group(1)
-assert gate == 'mtlPoshActive || vaNullGuardActive || vaVFEG12Active', gate
-for flag in ('mtlPoshActive=', 'vaNullGuardActive=', 'vaVFEG12Active='):
+assert gate == 'mtlPoshActive || vaNullGuardActive || vaVFEG12Active || vaVPFixActive', gate
+for flag in ('mtlPoshActive=', 'vaNullGuardActive=', 'vaVFEG12Active=', 'vaVPFixActive='):
     assert install.index(flag) < install.index('pageInRouted=true;')
 assert 'mtlPoshActive=mtl && noPOSH;' in install
 assert 'vaVFEG12Active=vaVFEG12Requested && noPOSH && checkKernelArgument("-wex-tgl-gpurec");' in install
@@ -37,7 +37,7 @@ assert 'vaVFEG12Active=vaVFEG12Requested && noPOSH && checkKernelArgument("-wex-
 # Dispatch: MTL keeps its tglNoPOSHEnabled scan gate; VA tables need a clean range.
 dispatch = body('static void pageInScan(')
 assert 'if(mtlPoshActive)mtlPoshScan(data,size);' in dispatch
-assert 'if(clean && (vaNullGuardActive || vaVFEG12Active))vaFixScan(offset,data,size);' in dispatch
+assert 'if(clean && (vaNullGuardActive || vaVFEG12Active || vaVPFixActive))vaFixScan(offset,data,size);' in dispatch
 mtl = body('static void mtlPoshScan(')
 assert 'tglNoPOSHEnabled' in mtl.split('forEachMatch')[0]
 assert 'pageInScan(offset,data,size,!(tainted && *tainted));' in body('static boolean_t pageInValidateRange(')
@@ -49,13 +49,17 @@ assert 'if(vaNullGuardActive)PageFix::scan(VAFix::NullGuard,' in scan
 assert 'if(vaVFEG12Active)PageFix::scan(VAFix::VFEG12,' in scan
 # Byte search is the local PageFix::findByte: lilu_os_memchr exists only from
 # Lilu 1.5.1 and tools/build.py declares an older Lilu (no new link dependency).
-assert scan.count(',offset,PageFix::findByte,[](size_t i,uint8_t *at,bool pinned) {') == 2
+assert scan.count(',offset,PageFix::findByte,[](size_t i,uint8_t *at,bool pinned) {') == 3
 assert not any('lilu_os_memchr' in line.split('//')[0] for t in sources.values() for line in t.splitlines())
-null_part, vfe_part = scan.split(' // -wex-va-vfeg12:')
+null_part, rest = scan.split(' // -wex-va-vfeg12:')
+vfe_part, vp_part = rest.split(' // -wex-va-vpfix')
 assert 'PageFix::single(pinned)' in null_part and 'vaVFEG12' not in null_part
 assert 'PageFix::member(&vaVFEG12Latch,vaVFEG12Gate(),pinned)' in vfe_part
-# NullGuard writes through vaFixWrite, VFEG12 members through vaVFEG12Write.
+# NullGuard and the #81 VP table write through vaFixWrite, VFEG12 members
+# through vaVFEG12Write. The VP table is an independent anchor (#81).
 assert null_part.count('vaFixWrite(') == 1 and 'vaFixWrite(' not in vfe_part
+assert 'if(vaVPFixActive)PageFix::scan(VAFix::VP,' in scan
+assert vp_part.count('vaFixWrite(VAFix::VP[i],at)') == 1 and 'PageFix::single(pinned)' in vp_part
 assert vfe_part.count('vaVFEG12Write(VAFix::VFEG12[i],at)') == 1
 for result, slot in (('Done', 'vaFixPatched(vaVFEG12Counts,i,VAFix::VFEG12[i])'), ('Skipped', 'GateSkips'), ('Failed', 'WriteFailures')):
     case = vfe_part[vfe_part.index('case PageFix::Write::' + result + ':'):]
@@ -95,4 +99,6 @@ assert '[0x1191]' in body('static void vaSampleL3Whitelist(')
 pub = install[install.index('WEXVAFixReady') - 200:]
 assert re.search(r'if\(vaNullGuardActive \|\| vaVFEG12Requested\) \{\n  root->setProperty\("WEXVAFixReady"', install)
 assert s.count('"WEXVAFix"') == 1 and s.count('"WEXVAFixReady"') == 1 and 'vaFixSerialize' in pub
+assert re.search(r'if\(vaVPFixActive\) \{\n  root->setProperty\("WEXVAFixVPReady"', install)
+assert s.count('"WEXVAFixVP"') == 1 and s.count('"WEXVAFixVPReady"') == 1 and 'vaVPFixSerialize' in install
 print('page_in_source: ok')

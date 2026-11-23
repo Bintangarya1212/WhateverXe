@@ -367,6 +367,17 @@ constexpr PageFix::Anchor VFEG12[VFEG12Anchors] {
     {0x1C16,V1From,V1To,sizeof(V1From),1},
     {0x2C8FC,V2From,V2To,sizeof(V2From),7},
 };
+// -wex-va-vpfix (issue #81): the AVD video-processing output capability list
+// (page 0x786000, offset 0xfc4). count=2 with fourcc4 entries "yuv2"/"NV12";
+// clearing the count hides both so AppleGVA stops selecting the VP batch that
+// never completes on the RCS (VFE not done), while hardware decode/encode
+// remain. Independent anchor, no gate beyond the switch.
+constexpr size_t VPAnchors=1;
+constexpr uint8_t VPFrom[8] {0x02,0x00,0x00,0x00,0x79,0x75,0x76,0x32};
+constexpr uint8_t VPTo[8]   {0x00,0x00,0x00,0x00,0x79,0x75,0x76,0x32};
+constexpr PageFix::Anchor VP[VPAnchors] {
+    {0x786FC4,VPFrom,VPTo,sizeof(VPFrom),1},
+};
 constexpr unsigned NullGuardSites=3,VFEG12Sites=8;
 // Counters per table: patched count per anchor (VFEG12 uses Patched0/1 only;
 // its Patched2 stays 0), patched sites, anchors found away from their file
