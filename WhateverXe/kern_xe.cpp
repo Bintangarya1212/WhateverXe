@@ -14832,17 +14832,28 @@ uint32_t XE::wrapTGLLaneMask(void *port) {
 	return FunctionCast(wrapTGLLaneMask, callbackXE->orgTGLLaneMask)(port);
 }
 
-// -wex-nogva. WEXNoGVA: revision 1, keys removed before native start, keys
-// removed after it, keys still present after the last pass, native start
-// result (1 true, 2 false). Bit n is tglGVAKeys[n].
+// -wex-nogva removes every GVA key; -wex-va-noenc a subset (scaler and the
+// encode keys) so hardware decode stays available. WEXNoGVA: revision 1, keys
+// removed before native start, keys removed after it, keys still present after
+// the last pass, native start result (1 true, 2 false). Bit n is tglGVAKeys[n].
 static const char *const tglGVAKeys[] {"IOGVACodec","IOGVAScaler","IOGVABGRAEnc",
  "IOGVAHEVCDecodeCapabilities","IOGVAHEVCEncodeCapabilities","IOGVAHEVCDecode",
  "IOVARendererID","IODVDBundleName"};
 static uint32_t tglNoGVAState[5] {1};
-static void tglNoGVARemove(IOService *service,unsigned phase) {
- if(!service)return;
+// Bit mask of keys to remove for this boot; 0 when neither switch is given.
+static uint32_t tglGVARemovalMask() {
+ const uint32_t all=(1U<<arrsize(tglGVAKeys))-1U;
+ if(checkKernelArgument("-wex-nogva"))return all;
+ // IOGVAScaler, IOGVABGRAEnc, IOGVAHEVCEncodeCapabilities: drop the encode
+ // and scaler paths, keep IOGVACodec/IOGVAHEVCDecode(+Capabilities).
+ if(checkKernelArgument("-wex-va-noenc"))return (1U<<1)|(1U<<2)|(1U<<4);
+ return 0;
+}
+static void tglNoGVARemove(IOService *service,unsigned phase,uint32_t mask) {
+ if(!service||!mask)return;
  uint32_t removed=0,remaining=0;
  for(unsigned i=0;i<arrsize(tglGVAKeys);++i) {
+  if(!(mask&(1U<<i)))continue;
   if(service->getProperty(tglGVAKeys[i])) {service->removeProperty(tglGVAKeys[i]);removed|=1U<<i;}
   if(service->getProperty(tglGVAKeys[i]))remaining|=1U<<i;
  }
@@ -14918,9 +14929,10 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	// -wex-nogva: advertise no hardware video. The 7 personality keys and the
 	// WEX-added IOGVAHEVCDecode are read only by user space (AppleGVA,
 	// VideoToolbox, FairPlay); the donor kext contains none of these strings.
-	const bool noGVA=checkKernelArgument("-wex-nogva");
-	if (noGVA) tglNoGVARemove(that,0);
-	else {
+	// -wex-va-noenc removes only the scaler and encode keys, keeping decode.
+	const uint32_t noGVA=tglGVARemovalMask();
+	if (noGVA) tglNoGVARemove(that,0,noGVA);
+	if (!checkKernelArgument("-wex-nogva")) {
 	// The current kernel personality uses 0x1080040, rejected by AppleGVA before
 	// AVD_CreateAVDAccelerator. The paired TGL VA donor returns 0x1080080.
 	// Align this registry identity only; keep the real PCI ID and TGL bundle.
@@ -14962,7 +14974,7 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	SYSLOG("igfx", "TGL accelerator start entered");
 	bool result = FunctionCast(wrapTGLAcceleratorStart, callbackXE->orgTGLAcceleratorStart)(that, provider);
 	// Native start has registered the service; remove anything that reappeared.
-	if (noGVA) tglNoGVARemove(that,result?1:2);
+	if (noGVA) tglNoGVARemove(that,result?1:2,noGVA);
 	if (result) IORegistryEntry::getRegistryRoot()->setProperty("TGLIOSurfaceCCSAtStart",
 		*reinterpret_cast<uint8_t *>(reinterpret_cast<uint8_t *>(that)+0x1474),32);
 	// -wex-va-vfeg12 only: record whether start programmed the 0xB134 whitelist.

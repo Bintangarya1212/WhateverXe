@@ -149,6 +149,7 @@
   ],
   "-wex-noaccel": [],
   "-wex-nogva": [],
+  "-wex-va-noenc": [],
   "-wex-display-trace": [],
   "-wex-adlp-readout": [],
   "-wex-adlp-load-only": [],
