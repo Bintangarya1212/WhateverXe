@@ -39,7 +39,7 @@ inline void drainContext(void *context, void *scheduler, Counters &counters) {
 	if (!isIdle) return;
 	if (!isIdle(scheduler, context)) {
 		__atomic_fetch_add(&counters.contextWaits, 1, __ATOMIC_RELAXED);
-		for (unsigned i = 0; i < 500; ++i) {
+		for (unsigned i = 0; i < 2000; ++i) {
 			IODelay(100);
 			if (isIdle(scheduler, context)) {
 				__atomic_fetch_add(&counters.contextDrained, 1, __ATOMIC_RELAXED);
@@ -59,7 +59,7 @@ inline void drainTask(void *task, void *scheduler, Counters &counters) {
 	if (!isGpuIdle) return;
 	if (!isGpuIdle(scheduler)) {
 		__atomic_fetch_add(&counters.taskWaits, 1, __ATOMIC_RELAXED);
-		for (unsigned i = 0; i < 500; ++i) {
+		for (unsigned i = 0; i < 2000; ++i) {
 			IODelay(100);
 			if (isGpuIdle(scheduler)) {
 				__atomic_fetch_add(&counters.taskDrained, 1, __ATOMIC_RELAXED);
