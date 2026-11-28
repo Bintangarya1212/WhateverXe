@@ -15247,6 +15247,22 @@ uint32_t XE::wrapTGLLaneMask(void *port) {
 	return FunctionCast(wrapTGLLaneMask, callbackXE->orgTGLLaneMask)(port);
 }
 
+static bool tglRemoveHardwareVideoProperties(IOService *accelerator) {
+	const char *const keys[] {
+		"IOGVACodec", "IOGVAScaler", "IOGVABGRAEnc",
+		"IOGVAHEVCDecodeCapabilities", "IOGVAHEVCEncodeCapabilities",
+		"IOGVAHEVCDecode", "IOVARendererID", "IODVDBundleName"
+	};
+	bool removed = true;
+	for (const auto key : keys) {
+		if (accelerator->getProperty(key))
+			accelerator->removeProperty(key);
+		if (accelerator->getProperty(key))
+			removed = false;
+	}
+	return removed;
+}
+
 bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
  if((callbackXE->tglGT2Detected && !callbackXE->tglGT2Ready) ||
     (callbackXE->display12SmallGTDetected && !callbackXE->display12SmallGTReady) ||
@@ -15311,21 +15327,28 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 		that->setProperty("Development",copy);copy->release();
 		pci->setProperty("N97NativeStartAllowed",true);
 	}
-	// The current kernel personality uses 0x1080040, rejected by AppleGVA before
-	// AVD_CreateAVDAccelerator. The paired TGL VA donor returns 0x1080080.
-	// Align this registry identity only; keep the real PCI ID and TGL bundle.
-	if (auto renderer = OSDynamicCast(OSNumber, that->getProperty("IOVARendererID"))) {
-		if (renderer->unsigned32BitValue() == 0x1080040)
-			that->setProperty("IOVARendererID", 0x1080080, 32);
-	}
+	auto pci = OSDynamicCast(IOPCIDevice, provider);
+	const bool softwareVideo = checkKernelArgument("-wex-nogva") &&
+		XELP::kernelOS(version) == XELP::OS::Sequoia &&
+		xelpSelectedProfile.identity == 0x9A498086 && !xelpSelectedProfile.overridden() &&
+		xelpSelectedDevice(pci);
+	if (!softwareVideo) {
+		// The current kernel personality uses 0x1080040, rejected by AppleGVA before
+		// AVD_CreateAVDAccelerator. The paired TGL VA donor returns 0x1080080.
+		// Align this registry identity only; keep the real PCI ID and TGL bundle.
+		if (auto renderer = OSDynamicCast(OSNumber, that->getProperty("IOVARendererID"))) {
+			if (renderer->unsigned32BitValue() == 0x1080040)
+				that->setProperty("IOVARendererID", 0x1080080, 32);
+		}
 
-	// Big Sur's HEVC decoder requires this registry admission key in addition
-	// to the per-profile capability dictionary. The TGL personality has the
-	// dictionary but omits the key; use the paired ICL host's registration value.
-	// This exposes decode only and does not invent additional profile support.
-	if (!that->getProperty("IOGVAHEVCDecode") &&
-	    OSDynamicCast(OSDictionary, that->getProperty("IOGVAHEVCDecodeCapabilities")))
-		that->setProperty("IOGVAHEVCDecode", "2");
+		// Big Sur's HEVC decoder requires this registry admission key in addition
+		// to the per-profile capability dictionary. The TGL personality has the
+		// dictionary but omits the key; use the paired ICL host's registration value.
+		// This exposes decode only and does not invent additional profile support.
+		if (!that->getProperty("IOGVAHEVCDecode") &&
+		    OSDynamicCast(OSDictionary, that->getProperty("IOGVAHEVCDecodeCapabilities")))
+			that->setProperty("IOGVAHEVCDecode", "2");
+	}
 
 	if (!tglBlitScratchSize || (*tglBlitScratchSize!=0xD240 && *tglBlitScratchSize!=0xE000)) {
 		SYSLOG("igfx", "TGL blit scratch parameter mismatch");
@@ -15334,7 +15357,6 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	*tglBlitScratchSize=0xE000;
 	IORegistryEntry::getRegistryRoot()->setProperty("TGLBlitScratchAllocation",*tglBlitScratchSize,64);
 
-	auto pci = OSDynamicCast(IOPCIDevice, provider);
 	auto bar = pci ? pci->getDeviceMemoryWithRegister(0x10) : nullptr;
 	__atomic_store_n(&callbackXE->tglAcceleratorOwner,that,__ATOMIC_RELEASE);
 	callbackXE->tglAcceleratorBARSize = bar ? bar->getLength() : 0;
@@ -15349,7 +15371,13 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
 	}
 	tglObserveAccelerator(that, 2, false, 0, reinterpret_cast<uintptr_t>(provider));
 	SYSLOG("igfx", "TGL accelerator start entered");
+	const bool absentAtEntry = !softwareVideo || tglRemoveHardwareVideoProperties(that);
 	bool result = FunctionCast(wrapTGLAcceleratorStart, callbackXE->orgTGLAcceleratorStart)(that, provider);
+	if (softwareVideo) {
+		// Start can republish capabilities before returning.
+		const bool removed = tglRemoveHardwareVideoProperties(that);
+		IORegistryEntry::getRegistryRoot()->setProperty("WEXNoGVAReady", result && absentAtEntry && removed);
+	}
 	if (result) IORegistryEntry::getRegistryRoot()->setProperty("TGLIOSurfaceCCSAtStart",
 		*reinterpret_cast<uint8_t *>(reinterpret_cast<uint8_t *>(that)+0x1474),32);
 	if (tglHost.owner==that) {

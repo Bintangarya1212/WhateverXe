@@ -34,6 +34,16 @@ The physical takeover and subsequent scanout require a separate hardware run.
 
 ## Maintaining test contracts
 
+`tgl_software_video` executes the production accelerator start wrapper and
+physical-provider selection against a registry and native-start model. The
+fork's `-wex-nogva` workaround requires the advertised video keys to be absent
+on native entry and when start returns, including keys republished during start.
+The switch is opt-in for the physical Tiger Lake 8086:9A49 on Sequoia. Tests
+preserve the normal renderer ID and HEVC registration on the default and
+out-of-scope paths, and preserve native start's result and unrelated properties.
+The mock establishes the selected provider and a successful route. It does
+not run Lilu, AppleGVA, VideoToolbox, the native driver, or real GPU workloads.
+
 `tgl_recovery` runs the production wrapper and helper against ABI-matched
 reset, scheduler, event-machine, submit and wait callees. The exact TGL donor's
 successful non-render branch provides the increment/submit/one-second wait

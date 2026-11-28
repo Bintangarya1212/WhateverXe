@@ -116,6 +116,7 @@
     "-n97displaytrace"
   ],
   "-wex-tgl-edp-keep": [],
+  "-wex-nogva": [],
   "-wex-tgl-off": [
     "-igfxtgloff"
   ],
